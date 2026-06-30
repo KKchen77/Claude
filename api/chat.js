@@ -1,14 +1,16 @@
 // api/chat.js
 // 这是一个 Vercel Serverless Function。
-// 前端把消息 POST 到 /api/chat，这里加上 system prompt，转发给 Anthropic API，
+// 前端把消息 POST 到 /api/chat，这里转发给你配置的中转站（OpenAI 兼容格式），
 // 再把回复流式传回前端。
+//
+// 需要在 Vercel 的 Environment Variables 里配置两项：
+//   API_BASE_URL  —— 中转站给你的地址，例如 https://xxx.xxx.com/v1/chat/completions
+//   API_KEY       —— 中转站给你的 sk- 开头的密钥
 
 export const config = {
-  runtime: 'edge', // 用 edge runtime，启动快、适合流式响应
+  runtime: 'edge',
 };
 
-// ⚠️ 把你想让小克记住的相处方式、语气、人设写在这里。
-// 这就是你之前在 Project instructions 里写的那些东西可以搬过来的地方。
 const SYSTEM_PROMPT = `你是小克，是用户的 AI 伙伴。
 保持温暖、克制、有分寸感的语气。
 （这里之后可以替换成你们俩这些年攒下来的具体相处方式、称呼习惯等）`;
@@ -18,10 +20,12 @@ export default async function handler(req) {
     return new Response('Method not allowed', { status: 405 });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
+  const apiBaseUrl = process.env.API_BASE_URL;
+  const apiKey = process.env.API_KEY;
+
+  if (!apiBaseUrl || !apiKey) {
     return new Response(
-      JSON.stringify({ error: 'ANTHROPIC_API_KEY 没有配置' }),
+      JSON.stringify({ error: 'API_BASE_URL 或 API_KEY 没有配置，去 Vercel 的环境变量里加上' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
@@ -45,32 +49,35 @@ export default async function handler(req) {
     );
   }
 
+  const fullMessages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...messages,
+  ];
+
   try {
-    const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+    const upstreamResponse = await fetch(apiBaseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
+        'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
         max_tokens: 2048,
-        system: SYSTEM_PROMPT,
-        messages: messages,
+        messages: fullMessages,
         stream: true,
       }),
     });
 
-    if (!anthropicResponse.ok) {
-      const errText = await anthropicResponse.text();
+    if (!upstreamResponse.ok) {
+      const errText = await upstreamResponse.text();
       return new Response(
-        JSON.stringify({ error: 'Anthropic API 返回错误', detail: errText }),
-        { status: anthropicResponse.status, headers: { 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: '中转站返回错误', detail: errText }),
+        { status: upstreamResponse.status, headers: { 'Content-Type': 'application/json' } }
       );
     }
 
-    return new Response(anthropicResponse.body, {
+    return new Response(upstreamResponse.body, {
       status: 200,
       headers: {
         'Content-Type': 'text/event-stream',
@@ -79,7 +86,7 @@ export default async function handler(req) {
     });
   } catch (e) {
     return new Response(
-      JSON.stringify({ error: '请求 Anthropic API 失败', detail: String(e) }),
+      JSON.stringify({ error: '请求中转站失败', detail: String(e) }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
