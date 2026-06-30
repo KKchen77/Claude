@@ -12,7 +12,7 @@
 </style>
 </head>
 <body>
-<h2>测试：能不能跟 Claude 说上话</h2>
+<h2>测试：能不能跟小克说上话</h2>
 <div id="log">还没发送任何消息。</div>
 <input id="input" placeholder="说点什么..." />
 <button onclick="send()">发送</button>
@@ -31,7 +31,7 @@ async function send() {
   logEl.textContent += '\n\n我: ' + text + '\n小克: ';
 
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch('/api/chat-openai-format', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: history }),
@@ -51,16 +51,18 @@ async function send() {
       const { done, value } = await reader.read();
       if (done) break;
       const chunk = decoder.decode(value, { stream: true });
-      // Anthropic 流式返回是 SSE 格式，每行形如 "data: {...}"
       const lines = chunk.split('\n').filter(l => l.startsWith('data: '));
       for (const line of lines) {
+        const payload = line.slice(6);
+        if (payload === '[DONE]') continue;
         try {
-          const json = JSON.parse(line.slice(6));
-          if (json.type === 'content_block_delta' && json.delta?.text) {
-            fullReply += json.delta.text;
-            logEl.textContent += json.delta.text;
+          const json = JSON.parse(payload);
+          const delta = json.choices?.[0]?.delta?.content;
+          if (delta) {
+            fullReply += delta;
+            logEl.textContent += delta;
           }
-        } catch (e) { /* 忽略解析失败的行（比如 event: 这种） */ }
+        } catch (e) { /* 忽略解析失败的行 */ }
       }
     }
 
